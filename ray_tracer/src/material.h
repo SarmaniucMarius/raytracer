@@ -1,22 +1,47 @@
 #pragma once
 
+#include "texture.h"
+
 struct Material
 {
 	virtual bool scatter(Hit_Record& rec, Ray& r, v3f& attenuation) = 0;
+	virtual v3f emitted(float u, float v, v3f p)
+	{
+		return v3f{ .0f, .0f, .0f };
+	}
+};
+
+struct Diffuse_Light : public Material
+{
+	shared_ptr<Texture> emit;
+
+	Diffuse_Light(shared_ptr<Texture> a) : emit(a) {}
+	Diffuse_Light(v3f c) : emit(make_shared<Solid_Color>(c)) {}
+
+	virtual bool scatter(Hit_Record& rec, Ray& r, v3f& attenuation) override
+	{
+		return false;
+	}
+
+	virtual v3f emitted(float u, float v, v3f p)
+	{
+		return emit->value(u, v, p);
+	}
 };
 
 struct Lambertian : Material
 {
-	v3f albedo;
+	shared_ptr<Texture> albedo;
 
-	Lambertian(v3f a) : albedo(a) {}
+	Lambertian(v3f a) : albedo(make_shared<Solid_Color>(a)) {}
+	Lambertian(shared_ptr<Texture> a) : albedo(a) {}
 
 	bool scatter(Hit_Record& rec, Ray& r, v3f& attenuation) override
 	{
 		v3f scattered_dir = rec.n + random_in_unit_vector();
 		r.direction = scattered_dir;
 		r.origin = rec.p;
-		attenuation = albedo;
+		attenuation = albedo->value(rec.u, rec.v, rec.p);
 		return true;
 	}
 };

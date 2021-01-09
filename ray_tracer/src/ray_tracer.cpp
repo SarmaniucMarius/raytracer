@@ -13,8 +13,12 @@ using namespace std;
 
 #include "ray_tracer.h"
 #include "hittable.h"
+#include "texture.h"
 #include "material.h"
 #include "camera.h"
+
+#define FAST_OBJ_IMPLEMENTATION
+#include "fast_obj.h"
 
 struct Job
 {
@@ -40,11 +44,11 @@ struct Job_Queue
 	atomic<uint64_t> finished_jobs;
 };
 
-v3f ray_cast(World& world, Ray r, int depth)
+v3f ray_cast(World& world, v3f background, Ray r, int depth)
 {
 	if (depth <= 0)
 	{
-		return V3f(.0f, .0f, .0f);
+		return v3f{ .0f, .0f, .0f };
 	}
 
 	bool hit = false;
@@ -64,18 +68,19 @@ v3f ray_cast(World& world, Ray r, int depth)
 	if (hit)
 	{
 		v3f attenuation = {};
-		if (rec.mat->scatter(rec, r, attenuation))
+		v3f emitted = rec.mat->emitted(rec.u, rec.v, rec.p);
+		if (!rec.mat->scatter(rec, r, attenuation))
 		{
-			return attenuation * ray_cast(world, r, depth - 1);
+			return emitted;
 		}
 		else
 		{
-			return V3f(.0f, .0f, .0f);
+			return emitted + attenuation * ray_cast(world, background, r, depth - 1);
 		}
 	}
 	else
 	{
-		return V3f(.5f, .7f, 1.0f);
+		return background;
 	}
 }
 
@@ -115,7 +120,7 @@ bool render_tile(Job_Queue& queue)
 
 				Ray r = camera.get_ray(film_x, film_y);
 
-				color += ray_cast(world, r, depth);
+				color += ray_cast(world, world.background, r, depth);
 
 				queue.total_bounces++;
 			}
@@ -137,6 +142,133 @@ void do_work(Job_Queue& queue)
 	while(render_tile(queue)) {}
 }
 
+bool aabb(Ray& r, v3f p0, v3f p1)
+{
+	float t0x = MIN((p0.x - r.origin.x) / r.direction.x, (p1.x - r.origin.x) / r.direction.x);
+	float t1x = MAX((p0.x - r.origin.x) / r.direction.x, (p1.x - r.origin.x) / r.direction.x);
+
+	float t0y = MIN((p0.y - r.origin.y) / r.direction.y, (p1.y - r.origin.y) / r.direction.y);
+	float t1y = MAX((p0.y - r.origin.y) / r.direction.y, (p1.y - r.origin.y) / r.direction.y);
+
+	float t_min = MAX(t0x, t0y);
+	float t_max = MIN(t1x, t1y);
+
+	if (t_min >= t_max) { return false; }
+
+	float t0z = MIN((p0.z - r.origin.z) / r.direction.z, (p1.z - r.origin.z) / r.direction.z);
+	float t1z = MIN((p0.z - r.origin.z) / r.direction.z, (p1.z - r.origin.z) / r.direction.z);
+
+	t_min = MIN(t0z, t_min);
+	t_max = MAX(t1z, t_max);
+
+	if (t_min >= t_max) { return false; }
+
+	return true;
+}
+
+enum World_Types
+{
+	DEFAULT_WORLD,
+	LIGHTED_WORLD,
+	MONKEY_WORLD,
+};
+
+World generate_world(World_Types type = DEFAULT_WORLD)
+{
+	World world = {};
+
+	switch (type)
+	{
+		case DEFAULT_WORLD:
+		{
+			auto earth_texture = make_shared<Image_Texture>("resources/earthmap.jpg");
+			auto earth_surface = make_shared<Lambertian>(earth_texture);
+			auto checker_texture = make_shared<Checker_Texture>(v3f{ .2f, .3f, .1f }, v3f{ .9f, .9f, .9f });
+			auto material_ground = make_shared<Lambertian>(checker_texture);
+			auto material_big_metal = make_shared<Metal>(V3f(0.2f, 0.25f, 0.7f), .0f);
+			auto material_big_dielectric = make_shared<Dielectric>(1.7f);
+			auto material_from_behind = make_shared<Lambertian>(V3f(1.0f, .0f, .0f));
+
+			auto big_sphere_dielectric = make_shared<Sphere>(V3f(2.5f, 2.0f, -3.0f), 2.0f, material_big_dielectric);
+			auto behind1 = make_shared<Sphere>(V3f(3.0f, .5f, -12.0f), .5f, material_from_behind);
+			auto behind2 = make_shared<Sphere>(V3f(7.0f, .5f, -20.0f), .5f, material_from_behind);
+			auto behind3 = make_shared<Sphere>(V3f(9.0f, .5f, -13.0f), .5f, material_from_behind);
+			auto big_sphere_metal = make_shared<Sphere>(V3f(-3.5f, 2.0f, -3.0f), 2.0f, material_big_metal);
+			auto center = make_shared<Sphere>(V3f(.0f, .5f, -1.0f), .5f, earth_surface);
+			auto left = make_shared<Sphere>(V3f(-2.0f, .5f, .0f), .5f, make_shared<Metal>(V3f(.8f, .6f, .2f), .7f));
+			auto right = make_shared<Sphere>(V3f(2.0f, .5f, 0.7f), .5f, make_shared<Metal>(V3f(.8f, .6f, .2f), .3f));
+			auto ground = make_shared<Sphere>(V3f(.0f, -1000.0f, .0f), 1000.0f, material_ground);
+
+			world.add_object(center);
+			world.add_object(left);
+			world.add_object(right);
+			world.add_object(ground);
+			world.add_object(big_sphere_dielectric);
+			world.add_object(behind1);
+			world.add_object(behind2);
+			world.add_object(behind3);
+			world.add_object(big_sphere_metal);
+
+			world.background = v3f{.7f, .8f, 1.0f};
+
+		} break;
+
+		case LIGHTED_WORLD:
+		{
+			auto light = make_shared<Diffuse_Light>(v3f{ 1.0f, 1.0f, 1.0f });
+			auto material_center = make_shared<Lambertian>(V3f(.7f, .3f, .3f));
+			auto checker_texture = make_shared<Checker_Texture>(v3f{ .2f, .3f, .1f }, v3f{ .9f, .9f, .9f });
+			auto material_ground = make_shared<Lambertian>(checker_texture);
+
+			auto sphere_light = make_shared<Sphere>(v3f{ .0f, 3.0f, .0f }, 1.5f, light);
+			auto ground = make_shared<Sphere>(v3f{ .0f, -1000.0f, .0f }, 1000.0f, material_ground);
+			auto center_sphere = make_shared<Sphere>(v3f{.0f, .5f, .0f}, .5f, material_center);
+
+			world.add_object(sphere_light);
+			world.add_object(ground);
+			world.add_object(center_sphere);
+			
+			world.background = v3f{ .0f, .0f, .0f };
+
+		} break;
+
+		case MONKEY_WORLD:
+		{
+			auto checker_texture = make_shared<Checker_Texture>(v3f{ .2f, .3f, .1f }, v3f{ .9f, .9f, .9f });
+			auto material_ground = make_shared<Lambertian>(checker_texture);
+			auto ground = make_shared<Sphere>(v3f{ .0f, -1000.0f, .0f }, 1000.0f, material_ground);
+
+			world.add_object(ground);
+
+			auto redish = make_shared<Lambertian>(V3f(.7f, .3f, .3f));
+			fastObjMesh* mesh = fast_obj_read("resources/suzanne.obj");
+
+			v3f monkey_offset = { .0f, 1.0f, .0f };
+
+			for (unsigned int i = 0; i < mesh->face_count; i++)
+			{
+				unsigned int v0_index = mesh->indices[i * 3].p;
+				unsigned int v1_index = mesh->indices[i * 3 + 1].p;
+				unsigned int v2_index = mesh->indices[i * 3 + 2].p;
+
+				v3f a = v3f{ mesh->positions[v0_index * 3], mesh->positions[v0_index * 3 + 1], mesh->positions[v0_index * 3 + 2] } +monkey_offset;
+				v3f b = v3f{ mesh->positions[v1_index * 3], mesh->positions[v1_index * 3 + 1], mesh->positions[v1_index * 3 + 2] } +monkey_offset;
+				v3f c = v3f{ mesh->positions[v2_index * 3], mesh->positions[v2_index * 3 + 1], mesh->positions[v2_index * 3 + 2] } +monkey_offset;
+				auto triangle = make_shared<Triangle>(a, b, c, redish);
+				world.add_object(triangle);
+			}
+
+			world.background = v3f{ .7f, .8f, 1.0f };
+		} break;
+
+		default:
+			printf("Couldn't generate such type of world!\n");
+			break;
+	}
+
+	return world;
+}
+
 int main()
 {
 	// Image
@@ -146,43 +278,18 @@ int main()
 	image.height = int(float(image.width) / aspect_ratio);
 	image.pixels = (uint32_t*)malloc(image.width * image.height * sizeof(uint32_t));
 
-	// World
-	World world = {};
-
-	auto material_center = make_shared<Lambertian>(V3f(.7f, .3f, .3f));
-	auto material_left = make_shared<Metal>(V3f(.8f, .6f, .2f), .7f);
-	auto material_right = make_shared<Metal>(V3f(.8f, .6f, .2f), .3f);
-	auto material_ground = make_shared<Lambertian>(V3f(.52f, .59f, .68f));
-	auto material_big_metal = make_shared<Metal>(V3f(0.2f, 0.25f, 0.7f), .0f);
-	auto material_big_dielectric = make_shared<Dielectric>(1.7f);
-	auto material_from_behind = make_shared<Lambertian>(V3f(1.0f, .0f, .0f));
-
-	auto big_sphere_dielectric = make_shared<Sphere>(V3f(2.5f, 2.0f, -3.0f), 2.0f, material_big_dielectric);
-	auto foo = make_shared<Sphere>(V3f(3.0f, .5f, -12.0f), .5f, material_from_behind);
-	auto bar = make_shared<Sphere>(V3f(7.0f, .5f, -20.0f), .5f, material_from_behind);
-	auto baz = make_shared<Sphere>(V3f(9.0f, .5f, -13.0f), .5f, material_from_behind);
-	auto big_sphere_metal = make_shared<Sphere>(V3f(-2.5f, 2.0f, -3.0f), 2.0f, material_big_metal);
-	auto center = make_shared<Sphere>(V3f(.0f, .5f, -1.0f), .5f, material_center);
-	auto left = make_shared<Sphere>(V3f(-2.0f, .5f, .0f), .5f, material_left);
-	auto right = make_shared<Sphere>(V3f(1.0f, .5f, 0.7f), .5f, material_right);
-	auto ground = make_shared<Plane>(V3f(.0f, 1.0f, .0f), .0f, material_ground);
-
-	world.add_object(center);
-	world.add_object(left);
-	world.add_object(right);
-	world.add_object(ground);
-	world.add_object(big_sphere_dielectric);
-	world.add_object(foo);
-	world.add_object(bar);
-	world.add_object(baz);
-	world.add_object(big_sphere_metal);
-
-	// Camera
-	Camera camera = Camera(aspect_ratio, 90.0f, V3f(.0f, .5f, 1.5f), V3f(.0f, .5f, -1.0f), V3f(.0f, 1.0f, .0f), .2f);
+	// World generation
+	v3f look_from = v3f{ .0f, 1.0f, 5.0f };
+	v3f look_at = v3f{ .0f, .0f, .0f };
+	v3f vup = v3f{ .0f, 1.0f, .0f };
+	float dist_to_focus = 10.0f;
+	float aperture = .2f;
+	Camera camera = Camera{ look_from, look_at, vup, aspect_ratio, 60.0f, aperture, dist_to_focus };
+	World world = generate_world(MONKEY_WORLD);
 	
 	// tile division
 	int core_count = 4; // this should be an OS query
-	int tile_width = image.width / core_count;
+	int tile_width = image.width / 8;
 	int tile_height = tile_width;
 	
 	int tile_count_x = (image.width + tile_width - 1) / tile_width;
@@ -191,7 +298,7 @@ int main()
 
 	Job_Queue queue = {};
 	queue.ray_depth = 8;
-	queue.samples_per_pixel = 128;
+	queue.samples_per_pixel = 32;
 	queue.jobs = new Job[total_tiles];
 
 	for (int tile_y = 0; tile_y < tile_count_y; tile_y++)
