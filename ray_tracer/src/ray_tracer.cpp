@@ -181,7 +181,7 @@ World generate_world(World_Types type = DEFAULT_WORLD)
 	{
 		case DEFAULT_WORLD:
 		{
-			auto earth_texture = make_shared<Image_Texture>("resources/earthmap.jpg");
+			auto earth_texture = make_shared<Image_Texture>("../resources/earthmap.jpg");
 			auto earth_surface = make_shared<Lambertian>(earth_texture);
 			auto checker_texture = make_shared<Checker_Texture>(v3f{ .2f, .3f, .1f }, v3f{ .9f, .9f, .9f });
 			auto material_ground = make_shared<Lambertian>(checker_texture);
@@ -241,7 +241,7 @@ World generate_world(World_Types type = DEFAULT_WORLD)
 			world.add_object(ground);
 
 			auto redish = make_shared<Lambertian>(V3f(.7f, .3f, .3f));
-			fastObjMesh* mesh = fast_obj_read("resources/suzanne.obj");
+			fastObjMesh* mesh = fast_obj_read("../resources/suzanne.obj");
 
 			v3f monkey_offset = { .0f, 1.0f, .0f };
 
@@ -285,7 +285,7 @@ int main()
 	float dist_to_focus = 10.0f;
 	float aperture = .2f;
 	Camera camera = Camera{ look_from, look_at, vup, aspect_ratio, 60.0f, aperture, dist_to_focus };
-	World world = generate_world(MONKEY_WORLD);
+	World world = generate_world();
 	
 	// tile division
 	int core_count = 4; // this should be an OS query
