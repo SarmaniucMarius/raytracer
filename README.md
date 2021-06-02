@@ -9,6 +9,6 @@ Multithreaded offline path tracer.
 - Defocus blur
 
 ## Demo
-![](examples/default.ppm)
-![](examples/lightning.ppm)
-![](examples/monkey.ppm)
+![](./examples/default.ppm)
+![](./examples/lightning.ppm)
+![](./examples/monkey.ppm)
